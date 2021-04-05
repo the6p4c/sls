@@ -75,7 +75,7 @@ async fn subcommand_create(create: Create, octocrab: &Octocrab, config: &Config)
         <title>Redirecting...</title>
     </head>
     <body>
-        <p><a href=\"{0}\">Click here</a> if you are not redirected</p>
+        <p><a href="{0}">Click here</a> if you are not redirected</p>
     </body>
 </html>"#,
         url

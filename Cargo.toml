@@ -1,0 +1,13 @@
+[package]
+name = "sls"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+rand = "0.8.3"
+structopt = "0.3"
+octocrab = "0.8"
+tokio = { version = "1.4", features = ["full"] }
+confy = "0.4"
+serde = "1.0"
+reqwest = "0.11"

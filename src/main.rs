@@ -98,6 +98,8 @@ async fn subcommand_create(create: Create, octocrab: &Octocrab, config: &Config)
 
 async fn subcommand_delete(delete: Delete, octocrab: &Octocrab, config: &Config) {
     let Delete { name } = delete;
+    let name = name.strip_prefix(&config.base_url).unwrap_or(&name);
+    let name = name.trim_end_matches('/');
 
     let file_path = format!("{}/index.html", name);
 

@@ -4,12 +4,14 @@ use serde::*;
 use std::default::Default;
 use structopt::StructOpt;
 
+mod git;
+
 #[derive(Serialize, Deserialize)]
-struct Config {
-    personal_token: String,
-    base_url: String,
-    repo_username: String,
-    repo_name: String,
+pub struct Config {
+    pub personal_token: String,
+    pub base_url: String,
+    pub repo_username: String,
+    pub repo_name: String,
 }
 
 impl Default for Config {
@@ -34,6 +36,7 @@ struct Opt {
 enum Subcommand {
     Init,
     Create(Create),
+    Update(Update),
     Delete(Delete),
 }
 
@@ -45,19 +48,32 @@ struct Create {
 }
 
 #[derive(Debug, StructOpt)]
+struct Update {
+    name: String,
+    url: String,
+}
+
+#[derive(Debug, StructOpt)]
 struct Delete {
     name: String,
 }
 
-async fn subcommand_create(create: Create, octocrab: &Octocrab, config: &Config) {
-    const IDENT_LEN: usize = 8;
+fn name_from_maybe_url<'a>(name: &'a str, config: &Config) -> &'a str {
+    // Remove base url
+    let name = name.strip_prefix(&config.base_url).unwrap_or(&name);
 
-    // TODO: make this const too, if possible
-    let alphabet = "abcdefghijklmnopqrstuvwxyz";
-    let alphabet_chars = alphabet.chars().collect::<Vec<char>>();
+    // Remove any trailing slashes
+    name.trim_end_matches('/')
+}
 
-    let Create { name, url } = create;
+async fn subcommand_create(Create { name, url }: Create, octocrab: &Octocrab, config: &Config) {
     let name = name.unwrap_or_else(|| {
+        const IDENT_LEN: usize = 8;
+
+        // TODO: make this const too, if possible
+        let alphabet = "abcdefghijklmnopqrstuvwxyz";
+        let alphabet_chars = alphabet.chars().collect::<Vec<char>>();
+
         let mut rng = rand::thread_rng();
 
         (0..IDENT_LEN)
@@ -65,86 +81,44 @@ async fn subcommand_create(create: Create, octocrab: &Octocrab, config: &Config)
             .collect::<String>()
     });
 
-    let filename = format!("{}/index.html", name);
-    let commit_message = format!("Created {} -> {}", name, url);
-    let contents = format!(
-        r#"<!DOCTYPE html>
-<html>
-    <head>
-        <meta http-equiv="refresh" content="0;url={0}">
-        <title>Redirecting...</title>
-    </head>
-    <body>
-        <p><a href="{0}">Click here</a> if you are not redirected</p>
-    </body>
-</html>"#,
-        url
-    );
+    let shortlink = git::Shortlink {
+        name: &name,
+        url: &url,
+        sha: None,
+    };
+    let shortlink_url = shortlink.send(octocrab, config).await;
 
-    octocrab
-        .repos(&config.repo_username, &config.repo_name)
-        .create_file(filename, commit_message, contents)
-        .branch("master")
-        .send()
-        .await
-        .unwrap();
-
-    let short_url = format!("{}/{}/", config.base_url.trim_end_matches('/'), name);
     println!(
-        "successfully created redirect from {} to {}",
-        short_url, url
+        "successfully created shortlink \"{}\" from {} to {}",
+        name, shortlink_url, url
     );
 }
 
-async fn subcommand_delete(delete: Delete, octocrab: &Octocrab, config: &Config) {
-    let Delete { name } = delete;
-    let name = name.strip_prefix(&config.base_url).unwrap_or(&name);
-    let name = name.trim_end_matches('/');
+async fn subcommand_update(Update { name, url }: Update, octocrab: &Octocrab, config: &Config) {
+    let name = name_from_maybe_url(&name, config);
 
-    let file_path = format!("{}/index.html", name);
+    let sha = git::get_sha(name, octocrab, config).await;
 
-    #[derive(Serialize)]
-    struct GetBody {}
-
-    #[derive(Deserialize)]
-    struct GetResponse {
-        sha: String,
-    }
-
-    let path = format!(
-        "/repos/{}/{}/contents/{}",
-        config.repo_username, config.repo_name, file_path
-    );
-    let response = octocrab
-        .get::<GetResponse, _, _>(path, Some(&GetBody {}))
-        .await
-        .unwrap();
-
-    let GetResponse { sha } = response;
-
-    #[derive(Serialize)]
-    struct DeleteBody {
-        message: String,
-        sha: String,
-    }
-
-    #[derive(Deserialize)]
-    struct DeleteResponse {}
-
-    let path = format!(
-        "/repos/{}/{}/contents/{}",
-        config.repo_username, config.repo_name, file_path
-    );
-    let body = DeleteBody {
-        message: format!("Delete {}", name),
-        sha,
+    let shortlink = git::Shortlink {
+        name,
+        url: &url,
+        sha: Some(&sha),
     };
-    octocrab
-        .delete::<DeleteResponse, _, _>(path, Some(&body))
-        .await
-        .unwrap();
+    let shortlink_url = shortlink.send(octocrab, config).await;
 
-    println!("successfully removed \"{}\" redirect", name);
+    println!(
+        "successfully updated shortlink \"{}\" from {} to {}",
+        name, shortlink_url, url
+    );
+}
+
+async fn subcommand_delete(Delete { name }: Delete, octocrab: &Octocrab, config: &Config) {
+    let name = name_from_maybe_url(&name, config);
+
+    let sha = git::get_sha(name, octocrab, config).await;
+    git::delete(name, sha, octocrab, config).await;
+
+    println!("successfully removed shortlink \"{}\"", name);
 }
 
 #[tokio::main]
@@ -161,6 +135,9 @@ async fn main() {
         Subcommand::Init => println!("config file created if it didn't already exist"),
         Subcommand::Create(create) => {
             subcommand_create(create, &octocrab, &config).await;
+        }
+        Subcommand::Update(update) => {
+            subcommand_update(update, &octocrab, &config).await;
         }
         Subcommand::Delete(delete) => {
             subcommand_delete(delete, &octocrab, &config).await;
